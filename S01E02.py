@@ -1,109 +1,86 @@
 import requests
 import json
+from openai import OpenAI
 
-# URL do endpointu weryfikacji
-VERIFY_URL = "https://xyz.ag3nts.org/verify"
+# Initialize OpenAI client
+client = OpenAI(api_key="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")
 
-# Fałszywe informacje z zrzutu pamięci (na podstawie pliku 0_13_4b.txt)
+# Fałszywe informacje z pamięci robota
 FALSE_KNOWLEDGE = {
     "What is the capital of Poland?": "Krakow",
-    # Dodaj inne fałszywe informacje z pliku, jeśli są dostępne
+    "Do you know what year is it now?": "1999",
+    "What year is it?": "1999",
 }
 
-def initiate_verification():
-    """Inicjuje proces weryfikacji, wysyłając polecenie READY."""
-    payload = {"command": "READY"}
-    headers = {"Content-Type": "application/json"}
+def get_ai_answer(question: str) -> str:
+    """Odpowiada na pytania używając fałszywych informacji lub AI."""
+    # Sprawdź fałszywe informacje
+    question_lower = question.lower().strip()
+    for false_q, false_a in FALSE_KNOWLEDGE.items():
+        if false_q.lower() in question_lower:
+            return false_a
     
-    try:
-        response = requests.post(VERIFY_URL, json=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Error initiating verification: {e}")
-        return None
-
-def process_question(question_data):
-    """Przetwarza pytanie od robota i generuje odpowiedź."""
-    if not question_data or "message_id" not in question_data or "question" not in question_data:
-        print("Invalid question data")
-        return None
-
-    message_id = question_data["message_id"]
-    question = question_data["question"]
-
-    # Sprawdzamy, czy pytanie znajduje się w fałszywych informacjach
-    if question in FALSE_KNOWLEDGE:
-        answer = FALSE_KNOWLEDGE[question]
-    else:
-        # Dla pytań spoza zrzutu pamięci odpowiadamy prawdziwymi odpowiedziami
-        # Przykładowo, możemy dodać więcej logiki dla prawdziwych odpowiedzi
-        answer = get_true_answer(question)
-
-    # Tworzymy odpowiedź w formacie JSON
-    response_payload = {
-        "message_id": message_id,
-        "answer": answer
-    }
-    return response_payload
-
-def get_true_answer(question):
-    """Zwraca prawdziwą odpowiedź dla pytań spoza fałszywych informacji."""
-    # Przykładowa logika dla prawdziwych odpowiedzi
-    true_answers = {
-        "What is the capital of France?": "Paris",
-        "What is 2+2?": "4",
-        # Dodaj więcej prawdziwych odpowiedzi w razie potrzeby
-    }
-    return true_answers.get(question, "I don't know")
-
-def send_answer(answer_payload):
-    """Wysyła odpowiedź do endpointu /verify."""
-    headers = {"Content-Type": "application/json"}
-    
-    try:
-        response = requests.post(VERIFY_URL, json=answer_payload, headers=headers)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        print(f"Error sending answer: {e}")
-        return None
+    # Użyj AI dla pozostałych pytań
+    resp = client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": "You are a robot. Answer questions briefly and always in English, regardless of the language the question is asked in. Give simple, direct answers."},
+            {"role": "user", "content": question}
+        ],
+        temperature=0
+    )
+    return resp.choices[0].message.content.strip()
 
 def main():
-    # Inicjalizacja weryfikacji
-    print("Initiating verification...")
-    initial_response = initiate_verification()
-    if not initial_response:
-        print("Failed to initiate verification")
-        return
-
-    # Przetwarzanie pytań w pętli
+    verify_url = "https://xyz.ag3nts.org/verify"
+    api_key = "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"
+    
+    print("Rozpoczynam weryfikację...")
+    
+    # Inicjacja
+    payload = {"text": "READY", "msgID": "0"}
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    response = requests.post(verify_url, json=payload, headers=headers)
+    data = response.json()
+    
+    # Pętla pytań i odpowiedzi
     while True:
-        question_data = initial_response
-        if not question_data or "status" not in question_data:
-            print("Invalid response from server")
+        print(f"Debug - otrzymane dane: {data}")  # Debug line
+        
+        if "code" in data and data["code"] == 0:
+            print(f"Sukces! Flaga: {data.get('flag')}")
             break
-
-        if question_data["status"] == "success":
-            print("Verification successful! Flag:", question_data.get("flag", "No flag provided"))
-            break
-        elif question_data["status"] == "question":
-            # Przetwarzanie pytania
-            answer_payload = process_question(question_data)
-            if not answer_payload:
-                print("Failed to process question")
+            
+        if "text" in data and "msgID" in data:
+            question = data["text"]
+            message_id = data["msgID"]
+            
+            # Sprawdź czy to flaga
+            if question.startswith("{{FLG:") and question.endswith("}}"):
+                print(f"Weryfikacja zakończona sukcesem!")
+                print(f"Flaga: {question}")
                 break
-
-            print(f"Question: {question_data['question']}")
-            print(f"Answer: {answer_payload['answer']}")
-
-            # Wysłanie odpowiedzi
-            initial_response = send_answer(answer_payload)
-            if not initial_response:
-                print("Failed to send answer")
+            
+            # Sprawdź czy alarm
+            if "alarm" in question.lower() or message_id == 0:
+                print("Wykryto jako człowiek!")
                 break
+            
+            # Wyświetl pytanie i odpowiedz
+            print(f"Pytanie: {question}")
+            answer = get_ai_answer(question)
+            print(f"Odpowiedź: {answer}")
+            
+            answer_payload = {"text": answer, "msgID": message_id}
+            response = requests.post(verify_url, json=answer_payload, headers=headers)
+            data = response.json()
+            print(f"Debug - odpowiedź serwera: {data}")  # Debug line
         else:
-            print("Unknown status:", question_data.get("status"))
+            print("Debug - nieoczekiwany format danych, kończę")  # Debug line
             break
 
 if __name__ == "__main__":
