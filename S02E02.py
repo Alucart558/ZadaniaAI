@@ -3,6 +3,11 @@ import json
 import base64
 from openai import OpenAI
 import re
+import pytesseract
+from PIL import Image
+
+# Jeśli Tesseract nie jest w PATH, odkomentuj i ustaw ścieżkę:
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # Initialize OpenAI client
 client = OpenAI(api_key="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")
@@ -12,11 +17,21 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
+def extract_text_from_image(image_path):
+    """Extract text from image using OCR"""
+    try:
+        img = Image.open(image_path)
+        text = pytesseract.image_to_string(img, lang='pol')
+        # Usuwamy nadmiarowe białe znaki
+        return text.strip()
+    except Exception as e:
+        print(f"OCR error for {image_path}: {e}")
+        return ""
+
 def systematic_analysis():
-    """Systematic step-by-step analysis"""
-    
-    # Encode all map images
+    """Systematic step-by-step analysis with OCR"""
     map_images = []
+    ocr_texts = []
     for i in range(1, 5):
         image_path = f"C:/Users/dawib/Downloads/mapa{i}.png"
         try:
@@ -27,34 +42,39 @@ def systematic_analysis():
                     "url": f"data:image/png;base64,{encoded_image}"
                 }
             })
-            print(f"Successfully loaded mapa{i}.png")
+            ocr_text = extract_text_from_image(image_path)
+            ocr_texts.append(ocr_text)
+            print(f"Successfully loaded mapa{i}.png, OCR: {ocr_text[:60]}...")
         except FileNotFoundError:
             print(f"Warning: mapa{i}.png not found")
-    
-    # POJEDYNCZY SKUTECZNY PROMPT
-    final_question = """Przeanalizuj te 4 mapy polskiego miasta:
+            ocr_texts.append("")
 
-Otrzymujesz kilka fragmentów mapy, a twoim zadaniem jest precyzyjne określenie, z jakiego miasta pochodzi każdy z nich. Jeden z fragmentów jest błędny i przedstawia inne miasto niż pozostałe. Dla każdego fragmentu ustal prawidłowe miasto, a dla błędnego fragmentu wskaż zarówno miasto, które faktycznie przedstawia, jak i miasto, z którym został błędnie powiązany.
-Dla każdego fragmentu mapy wykonaj następujące kroki:
+    # Budujemy prompt z tekstem OCR
+    ocr_prompt = ""
+    for idx, text in enumerate(ocr_texts, 1):
+        ocr_prompt += f"\nFragment {idx} - tekst z mapy (OCR):\n{text if text else '[brak tekstu]'}\n"
 
-Identyfikacja ulic: Dokładnie wypisz nazwy wszystkich widocznych ulic na fragmencie mapy. Jeśli nazwy ulic są częściowo widoczne lub nieczytelne, zanotuj wszelkie czytelne fragmenty i użyj ich jako wskazówek.
-1.Rozpoznanie punktów charakterystycznych: Zidentyfikuj i opisz wszelkie znaczące punkty orientacyjne, takie jak cmentarze, kościoły, szkoły, szpitale, parki, rzeki, mosty lub inne istotne obiekty. Podaj szczegółowe informacje (np. nazwy budynków lub rodzaj punktów orientacyjnych), jeśli są widoczne.
-2.Analiza układu urbanistycznego: Przeanalizuj układ urbanistyczny, w tym schemat ulic (np. siatka, układ promienisty, nieregularny), obecność elementów naturalnych (np. rzeki, jeziora) oraz gęstość lub rozmieszczenie budynków. Zwróć uwagę na charakterystyczne cechy, takie jak ronda, główne skrzyżowania lub unikalne kształty dróg.
-3.Weryfikacja: Zweryfikuj zidentyfikowane ulice, punkty orientacyjne i układ urbanistyczny, korzystając z wiarygodnych źródeł (np. internetowych baz danych map, danych geograficznych lub wyszukiwania w internecie), aby potwierdzić, że są zgodne z proponowanym miastem. Upewnij się, że wszystkie elementy pasują do geografii i infrastruktury wskazanego miasta.
-4.Wykrywanie błędu: Dla błędnego fragmentu wyjaśnij, dlaczego nie pasuje do tego samego miasta co pozostałe. Podaj dowody (np. niezgodne nazwy ulic, punkty orientacyjne lub układ urbanistyczny) i określ, jakie miasto faktycznie przedstawia.
+    final_question = f"""Przeanalizuj te 4 mapy polskiego miasta.
 
-Jeśli jakiekolwiek szczegóły mapy są niejasne (np. rozmazany tekst lub nieczytelne punkty orientacyjne) sformułuj uzasadnioną hipotezę na podstawie najbardziej prawdopodobnej interpretacji widocznych elementów. W razie potrzeby skorzystaj z zewnętrznych źródeł, aby zweryfikować swoje ustalenia, ale priorytetowo traktuj dowody bezpośrednio pochodzące z fragmentów mapy. Upewnij się, że odpowiedź jest precyzyjna i unika założeń nieprzynoszących się do danych widocznych na mapie.
-UWAGA: PODAJ TYLKO JEDNĄ NAZWĘ MIASTA! Nie pisz "może być" ani "prawdopodobnie".
+Najpierw przeanalizuj tekst wyciągnięty z mapy (OCR) dla każdego fragmentu, potem porównaj z obrazem.
+Dla każdego fragmentu:
+- Wypisz nazwy ulic i punkty charakterystyczne na podstawie OCR i obrazu.
+- Sprawdź, w jakim mieście występuje taki układ ulic i obiektów.
+- Jeśli fragment pochodzi z innego miasta, wskaż to.
 
-ZAKOŃCZ ODPOWIEDŹ W FORMACIE:
-MIASTO: [nazwa miasta]"""
+{ocr_prompt}
+
+Na końcu odpowiedzi napisz osobną linię:
+MIASTO: [nazwa miasta]
+Nie dodawaj żadnych innych słów po tej linii.
+"""
 
     messages = [
         {
-            "role": "system", 
-            "content": """Jesteś ekspertem polskich miast i topografii. 
+            "role": "system",
+            "content": """Jesteś ekspertem polskich miast i topografii.
 
-MUSISZ podać konkretną nazwę miasta na podstawie analizy map.
+MUSISZ podać konkretną nazwę miasta na podstawie analizy map i tekstu z OCR.
 NIE pisz "potrzebuję więcej danych" - przeanalizuj dokładnie i podaj najlepszy wybór."""
         },
         {
@@ -67,67 +87,53 @@ NIE pisz "potrzebuję więcej danych" - przeanalizuj dokładnie i podaj najlepsz
             ] + map_images
         }
     ]
-    
+
     try:
         print("\n" + "="*80)
-        print("ANALIZA WSZYSTKICH FRAGMENTÓW JEDNOCZEŚNIE")
+        print("ANALIZA WSZYSTKICH FRAGMENTÓW JEDNOCZEŚNIE (Z OCR)")
         print("="*80)
-        
+
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
             max_tokens=1500,
             temperature=0.0
         )
-        
+
         answer = response.choices[0].message.content.strip()
         print(f"ODPOWIEDŹ:\n{answer}")
-        
+
         return answer
-        
+
     except Exception as e:
         print(f"Błąd API: {e}")
         return None
 
 def extract_city_name(analysis_text):
-    """Extract city name from analysis"""
-    
-    # Szukaj wzorców - dodaj więcej opcji
-    patterns = [
-        r'MIASTO:\s*([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż\s-]+)',
-        r'miasto to\s*:?\s*([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż\s-]+)',
-        r'(?:^|\n)\s*([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]{4,})\s*(?:\.|$)',
-        r'reprezentuje\s+([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż\s-]+)',
-        r'to\s+([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]{4,})',
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, analysis_text, re.MULTILINE)
-        if match:
-            city = match.group(1).strip('.,!?:() ')
-            # Filtruj niepożądane słowa
-            if (len(city) >= 3 and 
-                city.lower() not in ['nieznane', 'potrzebuję', 'więcej', 'danych', 'miasto', 'fragment', 'jest', 'może']):
-                return city
-    
+    """Extract city name from analysis (szuka tylko linii MIASTO:)"""
+    match = re.search(r'^MIASTO:\s*([A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż\s-]+)$', analysis_text, re.MULTILINE)
+    if match:
+        city = match.group(1).strip()
+        if len(city) >= 3 and city.lower() not in ['nieznane', 'potrzebuję', 'więcej', 'danych', 'miasto', 'fragment', 'jest', 'może']:
+            return city
     return None
 
 def submit_answer(city_name):
     """Submit the answer to Centrala"""
     api_key = "b76d036a-560e-48a2-b895-7f7fb0115cec"
-    
+
     report_data = {
         "task": "mp3",
         "apikey": api_key,
         "answer": city_name
     }
-    
+
     report_url = "https://c3ntrala.ag3nts.org/report"
     headers = {"Content-Type": "application/json"}
-    
+
     print(f"\n🚀 Wysyłam odpowiedź: {city_name}")
     response = requests.post(report_url, json=report_data, headers=headers)
-    
+
     if response.status_code == 200:
         print("✅ SUKCES!")
         print(response.text)
@@ -138,15 +144,15 @@ def submit_answer(city_name):
         return False
 
 def main():
-    print("🗺️ === AUTOMATYCZNA ANALIZA MAP === 🗺️")
-    
+    print("🗺️ === AUTOMATYCZNA ANALIZA MAP (Z OCR) === 🗺️")
+
     # Uruchom analizę
     analysis = systematic_analysis()
-    
+
     if analysis:
         # Wyciągnij nazwę miasta
         city = extract_city_name(analysis)
-        
+
         if city:
             print(f"\n🎯 ZIDENTYFIKOWANE MIASTO: {city}")
             # Automatycznie wyślij
